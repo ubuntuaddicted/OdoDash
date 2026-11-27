@@ -1,0 +1,159 @@
+name: Upstream sync
+
+# [fork] Brings upstream OdoDash (moshiur-hridoy/OdoDash) into this fork without
+# ever merging it straight into dev. Each run merges the newest upstream
+# release into a fresh sync/upstream-* branch, runs the whole test suite
+# (upstream's tests and the fork's own tests/test_fork_*.py), and opens a pull
+# request into dev that says whether the tests passed and which of the fork's
+# changed files upstream also touched. Nothing lands until the PR is merged by
+# hand.
+#
+# A pull request opened with GITHUB_TOKEN does not start other workflows, so
+# ci.yml will not run on it by itself; that is why this job runs the tests and
+# writes the result into the PR. Run CI from the Actions tab to re-check.
+#
+# Scheduled runs only fire from the default branch (ododash-release), so the
+# weekly run starts once this file has been released there.
+
+on:
+  schedule:
+    - cron: '17 13 * * 1'   # Mondays 13:17 UTC (7:17 AM Central)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: https://github.com/moshiur-hridoy/OdoDash.git
+  UPSTREAM_BRANCH: ododash-release
+  TARGET_BRANCH: dev
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        id: fetch
+        run: |
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+          UPSTREAM_SHA=$(git rev-parse "upstream/$UPSTREAM_BRANCH")
+          echo "sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+          echo "short=${UPSTREAM_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$UPSTREAM_SHA" HEAD; then
+            echo "Already up to date with upstream $UPSTREAM_SHA"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BRANCH="sync/upstream-${UPSTREAM_SHA:0:7}"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            echo "A sync PR for upstream ${UPSTREAM_SHA:0:7} already exists"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "needed=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Find files both sides changed
+        if: steps.fetch.outputs.needed == 'true'
+        id: overlap
+        run: |
+          BASE=$(git merge-base HEAD "upstream/$UPSTREAM_BRANCH")
+          git diff --name-only "$BASE" HEAD | sort > ours.txt
+          git diff --name-only "$BASE" "upstream/$UPSTREAM_BRANCH" | sort > theirs.txt
+          comm -12 ours.txt theirs.txt > overlap.txt
+          git log --oneline --no-merges "HEAD..upstream/$UPSTREAM_BRANCH" | head -50 > upstream_commits.txt
+
+      - name: Merge upstream into a sync branch
+        if: steps.fetch.outputs.needed == 'true'
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${{ steps.fetch.outputs.branch }}"
+          if git merge --no-edit "upstream/$UPSTREAM_BRANCH" -m "chore: merge upstream OdoDash ${{ steps.fetch.outputs.short }}"; then
+            echo "conflicts=false" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U > conflicts.txt
+            git merge --abort
+            # Push upstream as-is so the conflicts can be resolved by hand in the PR.
+            git reset --hard "upstream/$UPSTREAM_BRANCH"
+            echo "conflicts=true" >> "$GITHUB_OUTPUT"
+          fi
+          git push origin "${{ steps.fetch.outputs.branch }}"
+
+      - name: Set up Python
+        if: steps.fetch.outputs.needed == 'true' && steps.merge.outputs.conflicts == 'false'
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Run tests on the merged code
+        if: steps.fetch.outputs.needed == 'true' && steps.merge.outputs.conflicts == 'false'
+        id: tests
+        run: |
+          pip install -r requirements.txt
+          set +e
+          python -m pytest tests/ -q --tb=short -p no:cacheprovider > pytest.log 2>&1
+          STATUS=$?
+          set -e
+          tail -n 40 pytest.log > pytest_tail.txt
+          python -m pytest tests/test_fork_*.py -q -p no:cacheprovider > fork.log 2>&1 && FORK=pass || FORK=fail
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "fork=$FORK" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request
+        if: steps.fetch.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Automated merge of upstream OdoDash \`${{ steps.fetch.outputs.short }}\` ($UPSTREAM_BRANCH) into \`$TARGET_BRANCH\`."
+            echo
+            if [ "${{ steps.merge.outputs.conflicts }}" = "true" ]; then
+              echo "## ⚠️ Merge conflicts"
+              echo "Upstream could not be merged automatically. This branch holds upstream as-is; resolve the conflicts in these files before merging:"
+              echo; sed 's/^/- `/; s/$/`/' conflicts.txt
+            else
+              if [ "${{ steps.tests.outputs.status }}" = "0" ]; then
+                echo "## ✅ All tests passed on the merged code"
+              else
+                echo "## ❌ Tests failed on the merged code"
+              fi
+              if [ "${{ steps.tests.outputs.fork }}" = "pass" ]; then
+                echo "Fork feature tests (\`tests/test_fork_*.py\`): **passed**"
+              else
+                echo "Fork feature tests (\`tests/test_fork_*.py\`): **FAILED**. An upstream change broke a fork feature."
+              fi
+              echo; echo "<details><summary>Test output (last 40 lines)</summary>"; echo; echo '```'; cat pytest_tail.txt; echo '```'; echo "</details>"
+            fi
+            echo
+            if [ -s overlap.txt ]; then
+              echo "## Files changed by both the fork and upstream"
+              echo "Check these closely, since they're where an upstream change is most likely to affect fork behaviour:"
+              echo; sed 's/^/- `/; s/$/`/' overlap.txt
+            else
+              echo "Upstream did not touch any file the fork has changed."
+            fi
+            echo; echo "## Upstream commits"; echo; echo '```'; cat upstream_commits.txt; echo '```'
+          } > body.md
+          TITLE="chore: sync upstream OdoDash ${{ steps.fetch.outputs.short }}"
+          DRAFT=()
+          if [ "${{ steps.merge.outputs.conflicts }}" = "true" ] || [ "${{ steps.tests.outputs.status }}" != "0" ]; then
+            DRAFT=(--draft)
+          fi
+          gh pr create --base "$TARGET_BRANCH" --head "${{ steps.fetch.outputs.branch }}" \
+            --title "$TITLE" --body-file body.md "${DRAFT[@]}"
