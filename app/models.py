@@ -2290,6 +2290,17 @@ class Trip(db.Model):
     start_odometer = db.Column(db.Float, nullable=False)
     end_odometer = db.Column(db.Float, nullable=True)
 
+    # [fork] Local clock times the trip started and ended, so a day with
+    # several trips can be told apart and checked against a calendar later.
+    start_time = db.Column(db.Time, nullable=True)
+    end_time = db.Column(db.Time, nullable=True)
+
+    # [fork] Distance measured by the phone's GPS, in the vehicle's odometer
+    # unit. Kept beside the odometer readings rather than replacing them: the
+    # odometer stays the record, GPS is what a phone can log unattended and is
+    # reconciled against real odometer checkpoints (fuel logs) afterwards.
+    gps_distance = db.Column(db.Float, nullable=True)
+
     # Fuel gauge readings as a percentage of a full tank (0-100), so fuel used
     # can be approximated against the vehicle's tank capacity (#273)
     start_fuel_level = db.Column(db.Float, nullable=True)
@@ -2337,9 +2348,12 @@ class Trip(db.Model):
             'id': self.id,
             'vehicle_id': self.vehicle_id,
             'date': self.date.isoformat() if self.date else None,
+            'start_time': self.start_time.isoformat() if self.start_time else None,
+            'end_time': self.end_time.isoformat() if self.end_time else None,
             'start_odometer': self.start_odometer,
             'end_odometer': self.end_odometer,
             'distance': self.distance,
+            'gps_distance': self.gps_distance,
             'start_fuel_level': self.start_fuel_level,
             'end_fuel_level': self.end_fuel_level,
             'fuel_used': self.fuel_used,

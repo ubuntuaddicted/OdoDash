@@ -911,6 +911,46 @@ def _parse_api_time(value):
     raise ValueError(f'Invalid time format: {value}')
 
 
+def _parse_trip_fork_fields(data):
+    """[fork] Read the optional trip fields this fork adds.
+
+    Returns ``(fields, error)``. ``fields`` holds only the keys present in the
+    request, so a PATCH leaves the others alone; an explicit ``null`` clears a
+    value. ``error`` is a ready 400 response, or ``None``. Kept in one helper so
+    the create and update endpoints change upstream code by a single call each,
+    which keeps merges from upstream small.
+    """
+    fields = {}
+    for key in ('start_time', 'end_time'):
+        if key not in data:
+            continue
+        value = data[key]
+        if value in (None, ''):
+            fields[key] = None
+            continue
+        try:
+            fields[key] = _parse_api_time(value)
+        except ValueError:
+            return None, (jsonify({
+                'error': f'Invalid {key}. Use HH:MM or HH:MM:SS',
+                'code': 'validation_error'
+            }), 400)
+
+    if 'gps_distance' in data:
+        try:
+            gps_distance = parse_decimal(data['gps_distance'])
+        except ValueError:
+            gps_distance = -1
+        if gps_distance is not None and not (math.isfinite(gps_distance) and gps_distance >= 0):
+            return None, (jsonify({
+                'error': 'gps_distance must be a number of 0 or more',
+                'code': 'validation_error'
+            }), 400)
+        fields['gps_distance'] = gps_distance
+
+    return fields, None
+
+
 def _parse_api_date(value):
     """Parse an ISO date string from an API request."""
     if not isinstance(value, str):
@@ -970,7 +1010,8 @@ def api_create_trip(vehicle_id):
 
     Required fields: date, start_odometer, purpose
     Optional fields: end_odometer, start_fuel_level, end_fuel_level, description,
-    start_location, end_location, notes
+    start_location, end_location, notes, and from this fork start_time,
+    end_time (HH:MM or HH:MM:SS) and gps_distance
     """
     user = get_api_user()
     vehicle = db.get_or_404(Vehicle, vehicle_id)
@@ -1014,12 +1055,17 @@ def api_create_trip(vehicle_id):
             'code': 'validation_error'
         }), 400
 
+    fork_fields, fork_error = _parse_trip_fork_fields(data)
+    if fork_error:
+        return fork_error
+
     trip = Trip(
         vehicle_id=vehicle_id,
         user_id=user.id,
         date=date,
         start_odometer=start_odometer,
         end_odometer=end_odometer,
+        **fork_fields,
         start_fuel_level=start_fuel_level,
         end_fuel_level=end_fuel_level,
         purpose=data['purpose'],
@@ -1099,6 +1145,13 @@ def api_update_trip(trip_id):
             'error': 'Fuel levels must be a percentage between 0 and 100',
             'code': 'validation_error'
         }), 400
+
+    fork_fields, fork_error = _parse_trip_fork_fields(data)
+    if fork_error:
+        db.session.rollback()
+        return fork_error
+    for field, value in fork_fields.items():
+        setattr(trip, field, value)
 
     if 'description' in data:
         trip.description = data['description']
