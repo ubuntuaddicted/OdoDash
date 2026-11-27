@@ -74,3 +74,19 @@ Run a tagged release of this fork, not `latest` or `dev`. Tag after merging to
 `ododash-release` (`v0.44.0-dan.1`, and so on). Rolling back means changing the
 image tag back. `docker.yml` publishes images to
 `ghcr.io/ubuntuaddicted/ododash`.
+
+## Fork releases
+
+Fork release notes go here rather than in `CHANGELOG.md`, which upstream edits
+on every release; fork entries there would conflict on every sync.
+`APP_VERSION` in `config.py` stays at the upstream version this fork is based
+on, since the sidebar's update check reads it as plain `X.Y.Z`. The fork's own
+version is the git tag: `v<upstream version>-dan.<n>`.
+
+### v0.52.0-dan.1 (2026-11-27)
+
+Based on upstream OdoDash 0.52.0.
+
+- Trips: `start_time`, `end_time` and `gps_distance`, in the model, API and migration `d0f1a2b3c4e5`.
+- Weekly upstream-sync workflow that opens a tested PR into `dev`.
+- `FORK.md` and `tests/test_fork_trip_tracking.py`.
