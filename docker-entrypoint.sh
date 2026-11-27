@@ -24,13 +24,19 @@ fi
 echo "[entrypoint] Running as may (PUID: $PUID, PGID: $PGID)"
 
 # Ensure the data + uploads directories exist, then fix ownership for bind
-# mounts. The recursive chown only runs when the top-level ownership is wrong,
+# mounts. Each directory is checked on its own: when /app/data is already
+# owned correctly, a freshly created uploads directory (made here as root)
+# would otherwise stay root-owned and every upload would fail with a 500.
+# The recursive chown only runs when a directory's own ownership is wrong,
 # so a correctly-owned (and possibly large) uploads directory doesn't slow
-# startup on every restart.
-mkdir -p /app/data/uploads
-if [ "$(stat -c '%u:%g' /app/data)" != "$PUID:$PGID" ]; then
-    chown -R may:may /app/data
-fi
+# startup on every restart. UPLOAD_FOLDER may point outside /app/data.
+UPLOAD_DIR="${UPLOAD_FOLDER:-/app/data/uploads}"
+mkdir -p /app/data "$UPLOAD_DIR"
+for dir in /app/data "$UPLOAD_DIR"; do
+    if [ "$(stat -c '%u:%g' "$dir")" != "$PUID:$PGID" ]; then
+        chown -R may:may "$dir"
+    fi
+done
 
 # Run database migrations as the may user. Failures are logged rather than
 # silently swallowed so upgrade problems are visible in container logs.
