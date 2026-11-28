@@ -1901,6 +1901,9 @@ class MaintenanceSchedule(db.Model):
     # Auto-create reminder when due
     auto_remind = db.Column(db.Boolean, default=True)
     remind_days_before = db.Column(db.Integer, default=14)
+    # [fork] The due point ("<date>|<reading>") last notified about, so each due
+    # point is announced once; completing the schedule moves the due point.
+    last_notified_key = db.Column(db.String(80))
     remind_miles_before = db.Column(db.Integer, default=500)
 
     is_active = db.Column(db.Boolean, default=True)
@@ -1919,7 +1922,9 @@ class MaintenanceSchedule(db.Model):
         if self.last_performed_date and self.interval_months:
             self.next_due_date = self.last_performed_date + relativedelta(months=self.interval_months)
 
-        if self.last_performed_odometer:
+        # [fork] A reading of 0 is a real reading (e.g. original spark plugs
+        # fitted at the factory), so only a missing reading skips this.
+        if self.last_performed_odometer is not None:
             if self.tracks_hours():
                 # This vehicle's readings are engine hours, so the only
                 # interval that means anything is one stated in hours, and no
