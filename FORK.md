@@ -11,6 +11,8 @@ log trips by itself for business mileage records. Everything else is upstream.
 | Trips | `start_time`, `end_time` (local clock time) and `gps_distance` (phone GPS, in the vehicle's odometer unit) | `app/models.py` (`Trip`) |
 | API | `POST /api/v1/vehicles/<id>/trips` and `PATCH /api/v1/trips/<id>` accept the three fields; every trip response returns them | `app/routes/api.py` (`_parse_trip_fork_fields`) |
 | Database | Migration `d0f1a2b3c4e5` adds the three nullable columns | `migrations/versions/d0f1a2b3c4e5_fork_trip_times_gps_distance.py` |
+| Maintenance | Schedules with "auto remind" send a notification (email, ntfy, Pushover, Telegram or webhook) when the due date is within the lead time, or the due reading is within the distance usually driven in that time (minimum 250). Once per due point. A last-performed reading of 0 now counts. | `app/services/maintenance_notifier.py`, `app/models.py` (`MaintenanceSchedule.last_notified_key`, `calculate_next_due`), `app/__init__.py` (scheduler hook) |
+| Database | Migration `e1a2b3c4d5f6` adds `maintenance_schedules.last_notified_key` | `migrations/versions/e1a2b3c4d5f6_fork_maintenance_notified_key.py` |
 | Tests | Guard the fork's features | `tests/test_fork_*.py` |
 | Upstream sync | Weekly PR that merges upstream and reports test results | `.github/workflows/upstream-sync.yml` |
 

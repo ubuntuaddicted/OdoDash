@@ -701,6 +701,19 @@ def _start_reminder_scheduler(app):
             except Exception as e:
                 logger.error(f"Error in reminder scheduler: {e}")
 
+            # [fork] Maintenance schedules notify by date and by reading.
+            try:
+                with app.app_context():
+                    from app.services.maintenance_notifier import process_due_maintenance
+                    m_stats = process_due_maintenance()
+                    if m_stats['sent'] > 0 or m_stats['failed'] > 0:
+                        logger.info(
+                            f"Maintenance check: {m_stats['sent']} sent, "
+                            f"{m_stats['failed']} failed, {m_stats['skipped']} skipped"
+                        )
+            except Exception as e:
+                logger.error(f"Error in maintenance notifier: {e}")
+
             try:
                 with app.app_context():
                     from app.services.recurring_processor import (
